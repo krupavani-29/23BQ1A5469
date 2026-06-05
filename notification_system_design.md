@@ -170,3 +170,127 @@ To deliver notifications instantly without forcing clients to repeatedly poll th
 2. **Subscription**: The server parses the connection's JWT token, maps the connection socket to the `studentID`, and subscribes to a Redis Pub/Sub channel matching `student:studentID`.
 3. **Dispatch**: When a notification is saved to the database, the server publishes the payload to the student's Redis channel.
 4. **Push**: The stream connection receives the event and writes it to the client connection as text/event-stream.
+
+---
+
+# Stage 2
+
+This section describes the persistent database storage choice, the relational schema model, scalability challenges, and the SQL queries required to support Stage 1 operations.
+
+---
+
+## 1. Database Selection: PostgreSQL
+
+We recommend **PostgreSQL** as the persistent storage engine for the notification platform.
+
+### Rationale:
+* **Strong Data Integrity (ACID)**: Notification histories must remain consistent. Relational constraints prevent orphaned dispatch entries and ensure students are only mapped to valid notifications.
+* **Transactional Operations**: Dispatching a notification and logging its creation (along with queue management) requires transactional atomic guarantees to ensure notifications are never lost or double-dispatched.
+* **JSONB Support**: Allows semi-structured payloads (such as deep link routing data or custom parameters) to be stored in notification entities while maintaining the performance of indexable binary JSON.
+* **Partitioning & Sharding Support**: Supports native table partitioning by timestamp (highly beneficial for time-series data like notifications) and integrates cleanly with sharding extensions (such as Citus) for horizontal scale.
+
+---
+
+## 2. Relational Database Schema (DDL)
+
+```sql
+-- Students Table (Entity)
+CREATE TABLE students (
+    student_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    mobile_no VARCHAR(15) NOT NULL,
+    github_username VARCHAR(50) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Notification Types Enum
+CREATE TYPE notification_type AS ENUM ('Event', 'Result', 'Placement');
+
+-- Notifications Table (Core Metadata)
+CREATE TABLE notifications (
+    notification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type notification_type NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Student-Notification Dispatch (Junction Entity / Mapping)
+-- Separates metadata from delivery status to optimize multi-recipient (Notify All) scenarios.
+CREATE TABLE student_notifications (
+    id BIGSERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    notification_id UUID NOT NULL REFERENCES notifications(notification_id) ON DELETE CASCADE,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    read_at TIMESTAMP WITH TIME ZONE NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_student_notification UNIQUE (student_id, notification_id)
+);
+
+-- Indexing Strategy
+CREATE INDEX idx_student_notifications_student_unread 
+ON student_notifications(student_id) 
+WHERE is_read = FALSE;
+
+CREATE INDEX idx_student_notifications_created 
+ON student_notifications(created_at DESC);
+```
+
+---
+
+## 3. Scalability Challenges & Solutions
+
+As the volume of students and notifications grows to tens of millions, the following challenges arise:
+
+| Scalability Challenge | Architectural Impact | Solution |
+| :--- | :--- | :--- |
+| **Index Bloat & RAM Exhaustion** | B-Tree indexes on `student_notifications` exceed RAM size, causing queries to swap to disk and slow down. | **Table Partitioning**: Partition `student_notifications` by range on `created_at` (e.g., monthly partitions). Drop or archive old partitions to keep active indexes in memory. |
+| **High Write Contention** | Sending bulk notifications (e.g. "Notify All" to 50k students) locks the write path, causing read delays. | **Write-Ahead Buffering**: Queue notification dispatches via Redis/RabbitMQ and write to DB in batched, micro-chunked transactions. |
+| **Slow Pagination Scans** | `OFFSET` pagination causes the database to read and discard millions of rows on deep pages. | **Keyset Pagination**: Avoid `OFFSET`. Paginate using cursor-based keysets (e.g., `WHERE created_at < last_seen_timestamp LIMIT 10`). |
+
+---
+
+## 4. API-Matching Database Queries
+
+Below are the SQL queries mapped to the REST endpoints designed in Stage 1:
+
+### Query A: Fetch Notifications (GET `/evaluation-service/notifications`)
+```sql
+SELECT n.notification_id, n.type, n.message, sn.is_read, sn.created_at
+FROM student_notifications sn
+JOIN notifications n ON sn.notification_id = n.notification_id
+WHERE sn.student_id = 1042 -- Parameterized student_id
+  AND (n.type = 'Result' OR 'Result' IS NULL) -- Filter parameter
+ORDER BY sn.created_at DESC
+LIMIT 10 OFFSET 0;
+```
+
+### Query B: Mark as Read (PATCH `/evaluation-service/notifications/read`)
+```sql
+UPDATE student_notifications
+SET is_read = TRUE, read_at = NOW()
+WHERE student_id = 1042 -- Scope to authenticated student for security
+  AND notification_id IN ('d146095a-0d86-4a34-9e69-3900a14576bc');
+```
+
+### Query C: Fetch Unread Count (GET `/evaluation-service/notifications/unread-count`)
+```sql
+SELECT COUNT(*) AS unread_count
+FROM student_notifications
+WHERE student_id = 1042 AND is_read = FALSE;
+```
+
+### Query D: Dispatch Notification (POST `/evaluation-service/notifications/dispatch`)
+```sql
+-- Step 1: Insert Core Notification Metadata
+INSERT INTO notifications (notification_id, type, message)
+VALUES ('d146095a-0d86-4a34-9e69-3900a14576bc', 'Placement', 'AMD is hiring!')
+RETURNING notification_id;
+
+-- Step 2: Bulk Insert Dispatches (Example for recipients 1042 and 1043)
+INSERT INTO student_notifications (student_id, notification_id)
+VALUES 
+  (1042, 'd146095a-0d86-4a34-9e69-3900a14576bc'),
+  (1043, 'd146095a-0d86-4a34-9e69-3900a14576bc');
+```
+
