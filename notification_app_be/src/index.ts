@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3001;
 
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001'],
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -142,12 +142,11 @@ app.get('/evaluation-service/notifications', validateAuth, async (req: Request, 
     const skip = (pageNum - 1) * limitNum;
 
     // Filter notifications
-    let notifications: StudentNotification[] = Array.from(
-      mockStudentNotifications.values()
-    ).filter(n => {
-      const key = `${studentID}`;
-      const matches = mockStudentNotifications.get(`${studentID}:${n.ID}`);
-      return matches !== undefined;
+    let notifications: StudentNotification[] = [];
+    mockStudentNotifications.forEach((val, key) => {
+      if (key.startsWith(`${studentID}:`)) {
+        notifications.push(val);
+      }
     });
 
     if (notification_type) {
@@ -228,9 +227,12 @@ app.patch('/evaluation-service/notifications/read', validateAuth, async (req: Re
 app.get('/evaluation-service/notifications/unread-count', validateAuth, async (req: Request, res: Response) => {
   try {
     const studentID = 23001;
-    const unreadCount = Array.from(mockStudentNotifications.values()).filter(
-      n => !n.isRead && mockStudentNotifications.has(`${studentID}:${n.ID}`)
-    ).length;
+    let unreadCount = 0;
+    mockStudentNotifications.forEach((val, key) => {
+      if (key.startsWith(`${studentID}:`) && !val.isRead) {
+        unreadCount++;
+      }
+    });
 
     await Log('backend', 'info', 'service', `Unread count: ${unreadCount}`);
 
@@ -291,16 +293,20 @@ app.post('/evaluation-service/notifications/dispatch', validateAuth, async (req:
 app.get('/evaluation-service/notifications/cached', validateAuth, async (req: Request, res: Response) => {
   try {
     const studentID = 23001;
+    
+    const notifications: StudentNotification[] = [];
+    mockStudentNotifications.forEach((val, key) => {
+      if (key.startsWith(`${studentID}:`)) {
+        notifications.push(val);
+      }
+    });
+
     const eTag = req.get('If-None-Match');
-    const currentETag = `"${Buffer.from(JSON.stringify(mockStudentNotifications)).toString('base64').slice(0, 20)}"`;
+    const currentETag = `"${Buffer.from(JSON.stringify(notifications)).toString('base64').slice(0, 20)}"`;
 
     if (eTag === currentETag) {
       return res.status(304).send();
     }
-
-    const notifications = Array.from(mockStudentNotifications.values()).filter(
-      n => mockStudentNotifications.has(`${studentID}:${n.ID}`)
-    );
 
     res.set('ETag', currentETag);
     res.set('Cache-Control', 'max-age=3600');

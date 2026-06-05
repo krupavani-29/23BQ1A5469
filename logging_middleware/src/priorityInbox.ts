@@ -6,7 +6,8 @@ import { Log } from './index';
 // Load environmental config from the local .env
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
-const NOTIFICATIONS_API = 'http://4.224.186.213/evaluation-service/notifications';
+const NOTIFICATIONS_API_LOCAL = 'http://localhost:3001/evaluation-service/notifications';
+const NOTIFICATIONS_API_REMOTE = 'http://4.224.186.213/evaluation-service/notifications';
 const AUTH_TOKEN = process.env.LOG_AUTH_TOKEN || '';
 
 interface RawNotification {
@@ -55,19 +56,23 @@ async function getPriorityInbox() {
     console.error('Failed to log transaction startup:', err.message);
   }
 
-  if (!AUTH_TOKEN) {
-    console.error('Error: LOG_AUTH_TOKEN is missing in logging_middleware/.env. Please run "npm run register" first.');
-    return;
-  }
-
   try {
-    const response = await axios.get<{ notifications: RawNotification[] }>(NOTIFICATIONS_API, {
-      headers: {
-        'Authorization': AUTH_TOKEN.startsWith('Bearer ') ? AUTH_TOKEN : `Bearer ${AUTH_TOKEN}`
-      }
-    });
+    let response;
+    const headers = AUTH_TOKEN ? {
+      'Authorization': AUTH_TOKEN.startsWith('Bearer ') ? AUTH_TOKEN : `Bearer ${AUTH_TOKEN}`
+    } : undefined;
 
-    const rawNotifications = response.data.notifications || [];
+    try {
+      response = await axios.get(NOTIFICATIONS_API_LOCAL, { headers });
+    } catch (localErr: any) {
+      console.warn(`Local API offline (${localErr.message}). Attempting remote fallback...`);
+      response = await axios.get(NOTIFICATIONS_API_REMOTE, { headers });
+    }
+
+    const rawNotifications: RawNotification[] = 
+      (response.data as any).notifications || 
+      (response.data as any).data?.notifications || 
+      [];
     
     // Process and calculate scores
     const rankedNotifications: RankedNotification[] = rawNotifications.map(n => ({

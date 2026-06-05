@@ -39,6 +39,9 @@ import {
   Stack,
   LinearProgress,
   useMediaQuery,
+  FormControlLabel,
+  Switch,
+  List,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import {
@@ -57,6 +60,7 @@ import {
   Sensors as SensorsIcon,
   Close as CloseIcon,
   Star as StarIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { clientLog } from './utils/logger';
@@ -99,693 +103,6 @@ const darkTheme = createTheme({
           boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.3)',
           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
           '&:hover': {
-            borderColor: 'rgba(99, 102, 241, 0.3)',
-            boxShadow: '0 8px 32px -4px rgba(99, 102, 241, 0.2)',
-            transform: 'translateY(-2px)',
-          },
-        },
-      },
-    },
-  },
-});
-
-// Types
-interface Notification {
-  ID: string;
-  Type: 'Placement' | 'Result' | 'Event';
-  Message: string;
-  Timestamp: string;
-  isRead?: boolean;
-  priorityScore?: number;
-}
-
-interface PaginationState {
-  totalItems: number;
-  limit: number;
-  currentPage: number;
-  totalPages: number;
-}
-
-// Main Component
-export default function NotificationCenter() {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isTablet = useMediaQuery(theme.breakpoints.down('md'));
-
-  // State Management
-  const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
-  const [priorityNotifications, setPriorityNotifications] = useState<Notification[]>([]);
-  const [filteredNotifications, setFilteredNotifications] = useState<Notification[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-
-  // Filter States
-  const [filterType, setFilterType] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pagination, setPagination] = useState<PaginationState>({
-    totalItems: 0,
-    limit: 10,
-    currentPage: 1,
-    totalPages: 1,
-  });
-
-  // UI States
-  const [activeView, setActiveView] = useState<'all' | 'priority'>('all');
-  const [snackbar, setSnackbar] = useState({ open: false, message: '' });
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-
-  const API_BASE = 'http://localhost:3001';
-  const AUTH_TOKEN = 'Bearer student_token_23bq1a5469';
-
-  // ============== UTILITY FUNCTIONS ==============
-
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case 'Placement':
-        return <WorkIcon sx={{ color: '#10b981' }} />;
-      case 'Result':
-        return <AssessmentIcon sx={{ color: '#f59e0b' }} />;
-      case 'Event':
-        return <EventIcon sx={{ color: '#6366f1' }} />;
-      default:
-        return <NotificationsIcon />;
-    }
-  };
-
-  const calculatePriorityScore = (notification: Notification): number => {
-    const weights: Record<string, number> = {
-      Placement: 3,
-      Result: 2,
-      Event: 1,
-    };
-
-    const weight = weights[notification.Type] || 0;
-    const isoStr = notification.Timestamp.replace(' ', 'T');
-    const epochSeconds = Math.floor(new Date(isoStr).getTime() / 1000);
-    return weight * 86400 + epochSeconds;
-  };
-
-  const formatTime = (timestamp: string): string => {
-    try {
-      const date = new Date(timestamp.replace(' ', 'T'));
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMs / 3600000);
-      const diffDays = Math.floor(diffMs / 86400000);
-
-      if (diffMins < 1) return 'Just now';
-      if (diffMins < 60) return `${diffMins}m ago`;
-      if (diffHours < 24) return `${diffHours}h ago`;
-      if (diffDays < 7) return `${diffDays}d ago`;
-      return date.toLocaleDateString();
-    } catch {
-      return timestamp;
-    }
-  };
-
-  // ============== API CALLS ==============
-
-  const fetchNotifications = async (page = 1) => {
-    try {
-      setLoading(true);
-      await clientLog('info', 'component', `Fetching page ${page}`);
-
-      const response = await axios.get(`${API_BASE}/evaluation-service/notifications`, {
-        params: {
-          limit: pagination.limit,
-          page,
-          notification_type: filterType !== 'all' ? filterType : undefined,
-          is_read: filterStatus !== 'all' ? (filterStatus === 'unread') : undefined,
-        },
-        headers: { Authorization: AUTH_TOKEN },
-      });
-
-      if (response.data.success) {
-        const notifs = response.data.data.notifications;
-        setAllNotifications(notifs);
-        setFilteredNotifications(notifs);
-        setPagination(response.data.data.pagination);
-        setCurrentPage(page);
-        setLastUpdated(new Date());
-        await clientLog('info', 'handler', `Loaded notifications ok`);
-      }
-    } catch (error) {
-      await clientLog('error', 'api', `Error loading notifications`);
-      setSnackbar({ open: true, message: 'Failed to load notifications' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchUnreadCount = async () => {
-    try {
-      const response = await axios.get(`${API_BASE}/evaluation-service/notifications/unread-count`, {
-        headers: { Authorization: AUTH_TOKEN },
-      });
-
-      if (response.data.success) {
-        setUnreadCount(response.data.unreadCount);
-      }
-    } catch (error) {
-      console.error('Error fetching unread count:', error);
-    }
-  };
-
-  const markNotificationAsRead = async (notificationID: string) => {
-    try {
-      await clientLog('info', 'handler', `Marking notification read`);
-
-      await axios.patch(
-        `${API_BASE}/evaluation-service/notifications/read`,
-        { notificationIDs: [notificationID] },
-        { headers: { Authorization: AUTH_TOKEN } }
-      );
-
-      setAllNotifications(prev =>
-        prev.map(n => (n.ID === notificationID ? { ...n, isRead: true } : n))
-      );
-
-      setFilteredNotifications(prev =>
-        prev.map(n => (n.ID === notificationID ? { ...n, isRead: true } : n))
-      );
-
-      await fetchUnreadCount();
-      setSnackbar({ open: true, message: 'Notification marked as read' });
-    } catch (error) {
-      await clientLog('error', 'api', `Error marking as read`);
-    }
-  };
-
-  const simulateNewNotification = async () => {
-    await clientLog('info', 'component', 'Simulating new notification');
-
-    const mockNotifications: Notification[] = [
-      {
-        ID: `sim-${Date.now()}`,
-        Type: 'Placement',
-        Message: 'Google hiring for Software Engineers',
-        Timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
-        isRead: false,
-      },
-      {
-        ID: `sim-${Date.now() + 1}`,
-        Type: 'Result',
-        Message: 'Final exams results announced',
-        Timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
-        isRead: false,
-      },
-      {
-        ID: `sim-${Date.now() + 2}`,
-        Type: 'Event',
-        Message: 'Internship fair registrations open',
-        Timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
-        isRead: false,
-      },
-    ];
-
-    const newNotif = mockNotifications[Math.floor(Math.random() * mockNotifications.length)];
-    setAllNotifications(prev => [newNotif, ...prev]);
-    setUnreadCount(prev => prev + 1);
-    setSnackbar({ open: true, message: '🔔 New notification received!' });
-
-    // Recalculate priority inbox
-    updatePriorityInbox([newNotif, ...allNotifications]);
-  };
-
-  const updatePriorityInbox = (notifs: Notification[]) => {
-    const sorted = [...notifs]
-      .map(n => ({ ...n, priorityScore: calculatePriorityScore(n) }))
-      .sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0))
-      .slice(0, 10);
-
-    setPriorityNotifications(sorted);
-  };
-
-  // ============== EFFECTS ==============
-
-  useEffect(() => {
-    fetchNotifications(1);
-    fetchUnreadCount();
-  }, []);
-
-  useEffect(() => {
-    updatePriorityInbox(allNotifications);
-  }, [allNotifications]);
-
-  useEffect(() => {
-    // Simulate real-time updates every 30 seconds
-    const interval = setInterval(simulateNewNotification, 30000);
-    return () => clearInterval(interval);
-  }, [allNotifications]);
-
-  // ============== RENDER NOTIFICATION CARD ==============
-
-  const NotificationCard = ({ notif, isPriority = false }: { notif: Notification; isPriority?: boolean }) => (
-    <Card
-      sx={{
-        cursor: 'pointer',
-        opacity: notif.isRead ? 0.7 : 1,
-        border: !notif.isRead ? '2px solid rgba(99, 102, 241, 0.3)' : '1px solid rgba(99, 102, 241, 0.1)',
-      }}
-      onClick={() => {
-        setSelectedNotification(notif);
-        setDialogOpen(true);
-        if (!notif.isRead) {
-          markNotificationAsRead(notif.ID);
-        }
-      }}
-    >
-      <CardContent sx={{ pb: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-          <Box sx={{ mt: 1 }}>{getTypeIcon(notif.Type)}</Box>
-
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-              <Chip
-                label={notif.Type}
-                size="small"
-                sx={{
-                  backgroundColor:
-                    notif.Type === 'Placement'
-                      ? 'rgba(16, 185, 129, 0.15)'
-                      : notif.Type === 'Result'
-                        ? 'rgba(245, 158, 11, 0.15)'
-                        : 'rgba(99, 102, 241, 0.15)',
-                  color:
-                    notif.Type === 'Placement'
-                      ? '#10b981'
-                      : notif.Type === 'Result'
-                        ? '#f59e0b'
-                        : '#6366f1',
-                }}
-              />
-
-              {!notif.isRead && <Badge variant="dot" color="warning" />}
-              {isPriority && <StarIcon sx={{ color: '#f59e0b', fontSize: 16 }} />}
-            </Box>
-
-            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {notif.Message}
-            </Typography>
-
-            <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-              <TimerIcon sx={{ fontSize: 12, mr: 0.5, verticalAlign: 'middle' }} />
-              {formatTime(notif.Timestamp)}
-            </Typography>
-          </Box>
-        </Box>
-      </CardContent>
-    </Card>
-  );
-
-  // ============== MAIN RENDER ==============
-
-  return (
-    <ThemeProvider theme={darkTheme}>
-      <CssBaseline />
-      <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#080c14' }}>
-        {/* Header AppBar */}
-        <AppBar
-          position="static"
-          sx={{
-            background: 'linear-gradient(135deg, #0f172a 0%, #1a1f3a 100%)',
-            borderBottom: '1px solid rgba(99, 102, 241, 0.2)',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-          }}
-        >
-          <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <SchoolIcon sx={{ fontSize: 32, color: '#6366f1' }} />
-              <Box>
-                <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.5 }}>
-                  Notification Center
-                </Typography>
-                <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                  Student ID: 23BQ1A5469
-                </Typography>
-              </Box>
-            </Box>
-
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Tooltip title="Refresh">
-                <IconButton onClick={() => fetchNotifications(1)} size="small" disabled={loading}>
-                  <RefreshIcon sx={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-                </IconButton>
-              </Tooltip>
-
-              <Tooltip title={`${unreadCount} unread`}>
-                <Badge badgeContent={unreadCount} color="error">
-                  <NotificationsIcon />
-                </Badge>
-              </Tooltip>
-
-              {lastUpdated && (
-                <Typography variant="caption" sx={{ color: '#94a3b8', ml: 1 }}>
-                  {formatTime(lastUpdated.toISOString())}
-                </Typography>
-              )}
-            </Box>
-          </Toolbar>
-        </AppBar>
-
-        {/* Main Content */}
-        <Box component="main" sx={{ flex: 1, p: { xs: 2, md: 3 } }}>
-          {isMobile ? (
-            // Mobile Bottom Nav View
-            <Container maxWidth="sm">
-              {activeView === 'priority' && (
-                <Box>
-                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
-                    ⭐ Priority Inbox
-                  </Typography>
-                  <Stack spacing={2}>
-                    {priorityNotifications.map((notif, idx) => (
-                      <Box key={notif.ID}>
-                        <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }}>
-                          <Typography variant="caption" sx={{ color: '#6366f1', fontWeight: 600 }}>
-                            #{idx + 1}
-                          </Typography>
-                          {notif.priorityScore && (
-                            <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                              Score: {notif.priorityScore}
-                            </Typography>
-                          )}
-                        </Box>
-                        <NotificationCard notif={notif} isPriority />
-                      </Box>
-                    ))}
-                  </Stack>
-                </Box>
-              )}
-
-              {activeView === 'all' && (
-                <Box>
-                  <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <FormControl size="small" sx={{ minWidth: 120 }}>
-                      <InputLabel>Type</InputLabel>
-                      <Select
-                        value={filterType}
-                        onChange={(e) => {
-                          setFilterType(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        label="Type"
-                      >
-                        <MenuItem value="all">All Types</MenuItem>
-                        <MenuItem value="Placement">Placement</MenuItem>
-                        <MenuItem value="Result">Result</MenuItem>
-                        <MenuItem value="Event">Event</MenuItem>
-                      </Select>
-                    </FormControl>
-
-                    <FormControl size="small" sx={{ minWidth: 120 }}>
-                      <InputLabel>Status</InputLabel>
-                      <Select
-                        value={filterStatus}
-                        onChange={(e) => {
-                          setFilterStatus(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        label="Status"
-                      >
-                        <MenuItem value="all">All</MenuItem>
-                        <MenuItem value="unread">Unread</MenuItem>
-                        <MenuItem value="read">Read</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Box>
-
-                  {loading && <LinearProgress sx={{ mb: 2 }} />}
-
-                  <Stack spacing={2}>
-                    {filteredNotifications.map(notif => (
-                      <NotificationCard key={notif.ID} notif={notif} />
-                    ))}
-                  </Stack>
-
-                  {filteredNotifications.length === 0 && !loading && (
-                    <Box sx={{ textAlign: 'center', py: 4 }}>
-                      <NotificationsIcon sx={{ fontSize: 48, color: '#94a3b8', mb: 2 }} />
-                      <Typography sx={{ color: '#94a3b8' }}>No notifications found</Typography>
-                    </Box>
-                  )}
-
-                  {pagination.totalPages > 1 && (
-                    <Pagination
-                      count={pagination.totalPages}
-                      page={currentPage}
-                      onChange={(e, page) => fetchNotifications(page)}
-                      sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}
-                    />
-                  )}
-                </Box>
-              )}
-            </Container>
-          ) : (
-            // Desktop Grid View
-            <Grid container spacing={3}>
-              {/* Priority Inbox - Left Column */}
-              <Grid item xs={12} md={4}>
-                <Paper
-                  sx={{
-                    p: 3,
-                    background: 'linear-gradient(135deg, rgba(99,102,241,0.05) 0%, rgba(16,185,129,0.05) 100%)',
-                    borderRadius: 2,
-                    border: '1px solid rgba(99, 102, 241, 0.2)',
-                  }}
-                >
-                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <StarIcon sx={{ color: '#f59e0b' }} />
-                    Priority Inbox
-                  </Typography>
-
-                  <Stack spacing={1.5} sx={{ maxHeight: 'calc(100vh - 300px)', overflowY: 'auto' }}>
-                    {priorityNotifications.map((notif, idx) => (
-                      <Card
-                        key={notif.ID}
-                        sx={{
-                          backgroundColor: '#0f172a',
-                          borderLeft: '4px solid #6366f1',
-                          p: 1.5,
-                          cursor: 'pointer',
-                        }}
-                        onClick={() => {
-                          setSelectedNotification(notif);
-                          setDialogOpen(true);
-                        }}
-                      >
-                        <Typography variant="overline" sx={{ color: '#6366f1', fontSize: 10 }}>
-                          #{idx + 1} • Score: {notif.priorityScore?.toFixed(0)}
-                        </Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5, mb: 0.5 }}>
-                          {notif.Message}
-                        </Typography>
-                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                          <Chip label={notif.Type} size="small" />
-                          <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                            {formatTime(notif.Timestamp)}
-                          </Typography>
-                        </Box>
-                      </Card>
-                    ))}
-                  </Stack>
-                </Paper>
-              </Grid>
-
-              {/* All Notifications - Right Column */}
-              <Grid item xs={12} md={8}>
-                <Paper sx={{ p: 3 }}>
-                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
-                    All Notifications
-                  </Typography>
-
-                  <Box sx={{ mb: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                    <FormControl size="small" sx={{ minWidth: 140 }}>
-                      <InputLabel>Type</InputLabel>
-                      <Select
-                        value={filterType}
-                        onChange={(e) => {
-                          setFilterType(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        label="Type"
-                      >
-                        <MenuItem value="all">All Types</MenuItem>
-                        <MenuItem value="Placement">Placement</MenuItem>
-                        <MenuItem value="Result">Result</MenuItem>
-                        <MenuItem value="Event">Event</MenuItem>
-                      </Select>
-                    </FormControl>
-
-                    <FormControl size="small" sx={{ minWidth: 140 }}>
-                      <InputLabel>Status</InputLabel>
-                      <Select
-                        value={filterStatus}
-                        onChange={(e) => {
-                          setFilterStatus(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        label="Status"
-                      >
-                        <MenuItem value="all">All</MenuItem>
-                        <MenuItem value="unread">Unread</MenuItem>
-                        <MenuItem value="read">Read</MenuItem>
-                      </Select>
-                    </FormControl>
-
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      startIcon={<SensorsIcon />}
-                      onClick={simulateNewNotification}
-                    >
-                      Simulate SSE
-                    </Button>
-                  </Box>
-
-                  {loading && <LinearProgress sx={{ mb: 2 }} />}
-
-                  <Stack spacing={2} sx={{ maxHeight: 'calc(100vh - 300px)', overflowY: 'auto' }}>
-                    {filteredNotifications.map(notif => (
-                      <NotificationCard key={notif.ID} notif={notif} />
-                    ))}
-                  </Stack>
-
-                  {filteredNotifications.length === 0 && !loading && (
-                    <Box sx={{ textAlign: 'center', py: 4 }}>
-                      <NotificationsIcon sx={{ fontSize: 48, color: '#94a3b8', mb: 2 }} />
-                      <Typography sx={{ color: '#94a3b8' }}>No notifications found</Typography>
-                    </Box>
-                  )}
-
-                  {pagination.totalPages > 1 && (
-                    <Pagination
-                      count={pagination.totalPages}
-                      page={currentPage}
-                      onChange={(e, page) => fetchNotifications(page)}
-                      sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}
-                    />
-                  )}
-                </Paper>
-              </Grid>
-            </Grid>
-          )}
-        </Box>
-
-        {/* Mobile Bottom Navigation */}
-        {isMobile && (
-          <BottomNavigation
-            value={activeView}
-            onChange={(e, newValue) => setActiveView(newValue)}
-            sx={{ borderTop: '1px solid rgba(99, 102, 241, 0.2)' }}
-          >
-            <BottomNavigationAction label="All" value="all" icon={<NotificationsIcon />} />
-            <BottomNavigationAction label="Priority" value="priority" icon={<StarIcon />} />
-          </BottomNavigation>
-        )}
-
-        {/* Notification Detail Dialog */}
-        <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-          {selectedNotification && (
-            <>
-              <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  {getTypeIcon(selectedNotification.Type)}
-                  <Typography variant="h6">{selectedNotification.Type}</Typography>
-                </Box>
-                <IconButton onClick={() => setDialogOpen(false)} size="small">
-                  <CloseIcon />
-                </IconButton>
-              </DialogTitle>
-
-              <DialogContent>
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="body1" sx={{ mb: 2, fontWeight: 500 }}>
-                    {selectedNotification.Message}
-                  </Typography>
-
-                  <Divider sx={{ my: 2 }} />
-
-                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-                    <Box>
-                      <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                        Time
-                      </Typography>
-                      <Typography variant="body2">{selectedNotification.Timestamp}</Typography>
-                    </Box>
-
-                    <Box>
-                      <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                        Status
-                      </Typography>
-                      <Typography variant="body2">{selectedNotification.isRead ? '✓ Read' : '● Unread'}</Typography>
-                    </Box>
-                  </Box>
-
-                  {selectedNotification.priorityScore && (
-                    <>
-                      <Divider sx={{ my: 2 }} />
-                      <Box>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                          Priority Score
-                        </Typography>
-                        <Typography variant="body2">{selectedNotification.priorityScore.toFixed(0)}</Typography>
-                      </Box>
-                    </>
-                  )}
-                </Box>
-              </DialogContent>
-
-              <DialogActions>
-                {!selectedNotification.isRead && (
-                  <Button
-                    onClick={() => {
-                      markNotificationAsRead(selectedNotification.ID);
-                      setDialogOpen(false);
-                    }}
-                    variant="contained"
-                    startIcon={<MarkReadIcon />}
-                  >
-                    Mark as Read
-                  </Button>
-                )}
-                <Button onClick={() => setDialogOpen(false)}>Close</Button>
-              </DialogActions>
-            </>
-          )}
-        </Dialog>
-
-        {/* Snackbar */}
-        <Snackbar
-          open={snackbar.open}
-          autoHideDuration={3000}
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        >
-          <Alert severity="info" onClose={() => setSnackbar({ ...snackbar, open: false })}>
-            {snackbar.message}
-          </Alert>
-        </Snackbar>
-      </Box>
-
-      <style jsx global>{`
-        @keyframes spin {
-          from {
-            transform: rotate(0deg);
-          }
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      `}</style>
-    </ThemeProvider>
-  );
-}
-
             transform: 'translateY(-3px)',
             borderColor: 'rgba(99, 102, 241, 0.4)',
             boxShadow: '0 12px 30px -4px rgba(99, 102, 241, 0.15)',
@@ -801,6 +118,8 @@ interface Notification {
   Type: 'Placement' | 'Result' | 'Event' | string;
   Message: string;
   Timestamp: string;
+  isRead?: boolean;
+  score?: number;
 }
 
 const WEIGHTS: Record<string, number> = {
@@ -809,7 +128,11 @@ const WEIGHTS: Record<string, number> = {
   Event: 1
 };
 
-export default function Home() {
+export default function NotificationCenter() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isTablet = useMediaQuery(theme.breakpoints.down('md'));
+
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
@@ -836,10 +159,19 @@ export default function Home() {
     await clientLog('info', 'page', 'Loading notifications page');
     try {
       const response = await axios.get('/api/notifications');
-      if (response.data && response.data.notifications) {
-        setNotifications(response.data.notifications);
-        await clientLog('info', 'state', `Loaded ${response.data.notifications.length} notifications`);
-      }
+      const notificationsData = response.data.notifications || response.data.data?.notifications || [];
+      setNotifications(notificationsData);
+      
+      // Sync local read state
+      const initialReadIds = new Set<string>();
+      notificationsData.forEach((n: any) => {
+        if (n.isRead) {
+          initialReadIds.add(n.ID);
+        }
+      });
+      setReadIds(initialReadIds);
+
+      await clientLog('info', 'state', `Loaded ${notificationsData.length} notifications`);
     } catch (err: any) {
       await clientLog('error', 'api', `Failed to load notifications: ${err.message}`);
     } finally {
@@ -851,6 +183,37 @@ export default function Home() {
     fetchNotifications();
   }, []);
 
+  // Connect to real SSE stream if backend is available
+  useEffect(() => {
+    const eventSource = new EventSource('http://localhost:3001/evaluation-service/notifications/stream');
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'notification' && data.notification) {
+          const newNotif = data.notification;
+          setNotifications(prev => {
+            if (prev.some(n => n.ID === newNotif.ID)) return prev;
+            const updated = [newNotif, ...prev];
+            setToastMessage(`🔔 New real-time event: ${newNotif.Type}`);
+            clientLog('info', 'state', `Real-time SSE event received: ${newNotif.Type}`).catch(() => {});
+            return updated;
+          });
+        }
+      } catch (err) {
+        console.error('Error parsing SSE message:', err);
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
   // Priority Score Function
   const calculateScore = (type: string, timestampStr: string): number => {
     const weight = WEIGHTS[type] || 0;
@@ -859,11 +222,11 @@ export default function Home() {
     return (weight * 86400) + epochSeconds;
   };
 
-  // 1. Process all notifications with local state tracking
+  // Process all notifications with local state tracking
   const processedNotifications = useMemo(() => {
     return notifications.map(n => ({
       ...n,
-      isRead: readIds.has(n.ID),
+      isRead: n.isRead || readIds.has(n.ID),
       score: calculateScore(n.Type, n.Timestamp)
     }));
   }, [notifications, readIds]);
@@ -883,7 +246,7 @@ export default function Home() {
     return { total, unread, placement, result, event, placementPct, resultPct, eventPct };
   }, [processedNotifications]);
 
-  // 2. Filter notifications
+  // Filter notifications
   const filteredNotifications = useMemo(() => {
     return processedNotifications.filter(n => {
       const typeMatch = filterType === 'All' || n.Type === filterType;
@@ -898,16 +261,16 @@ export default function Home() {
     });
   }, [processedNotifications, filterType, filterRead, searchQuery]);
 
-  // 3. Paginated notifications
+  // Paginated notifications
   const paginatedNotifications = useMemo(() => {
     const startIndex = (page - 1) * limit;
     return filteredNotifications.slice(startIndex, startIndex + limit);
   }, [filteredNotifications, page, limit]);
 
-  // 4. Calculate Top 10 Priority Inbox
+  // Calculate Top 10 Priority Inbox
   const priorityInbox = useMemo(() => {
     return [...processedNotifications]
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, 10);
   }, [processedNotifications]);
 
@@ -920,6 +283,13 @@ export default function Home() {
     newReadIds.add(notification.ID);
     setReadIds(newReadIds);
     await clientLog('info', 'component', `Opened notification ID ${notification.ID}`);
+
+    // Update read state on server
+    try {
+      await axios.patch('/api/notifications/read', { notificationIDs: [notification.ID] });
+    } catch (err) {
+      console.error('Failed to mark read on server:', err);
+    }
   };
 
   const handleCloseNotification = () => {
@@ -929,10 +299,24 @@ export default function Home() {
   // Bulk action: Mark current visible page as read
   const handleMarkPageAsRead = async () => {
     const newReadIds = new Set(readIds);
-    paginatedNotifications.forEach(n => newReadIds.add(n.ID));
+    const idsToMark: string[] = [];
+    paginatedNotifications.forEach(n => {
+      if (!n.isRead) {
+        newReadIds.add(n.ID);
+        idsToMark.push(n.ID);
+      }
+    });
     setReadIds(newReadIds);
     await clientLog('info', 'component', 'Marked current page notifications as read');
     setToastMessage('Marked current page notifications as read');
+
+    if (idsToMark.length > 0) {
+      try {
+        await axios.patch('/api/notifications/read', { notificationIDs: idsToMark });
+      } catch (err) {
+        console.error('Failed to mark page as read on server:', err);
+      }
+    }
   };
 
   // Helper to get Notification Type Icon
@@ -1012,14 +396,14 @@ export default function Home() {
   // Auto-streaming trigger setup
   useEffect(() => {
     if (autoStream) {
-      clientLog('info', 'component', 'Auto streaming simulation started');
+      clientLog('info', 'component', 'Auto streaming simulation started').catch(() => {});
       autoStreamInterval.current = setInterval(() => {
-        handleSimulateEvent(false);
+        handleSimulateEvent(true);
       }, 8000);
     } else {
       if (autoStreamInterval.current) {
         clearInterval(autoStreamInterval.current);
-        clientLog('info', 'component', 'Auto streaming simulation stopped');
+        clientLog('info', 'component', 'Auto streaming simulation stopped').catch(() => {});
       }
     }
     return () => {
@@ -1052,7 +436,7 @@ export default function Home() {
       <Box sx={{ pb: { xs: 8, md: 4 }, minHeight: '100vh', backgroundColor: 'background.default' }}>
         
         {/* Sleek App Header Bar */}
-        <AppBar position="sticky" sx={{ background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(12px)', borderBottom: '1px solid rgba(99, 102, 241, 0.15)' }}>
+        <AppBar position="sticky" sx={{ background: 'rgba(15, 23, 42, 0.85)', backdropFilter: 'blur(12px)', borderBottom: '1px solid rgba(99, 102, 241, 0.15)', zIndex: 1100 }}>
           <Container maxWidth="xl">
             <Toolbar disableGutters sx={{ justifyContent: 'space-between' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -1080,7 +464,7 @@ export default function Home() {
                 <IconButton onClick={fetchNotifications} size="medium" sx={{ border: '1px solid rgba(255,255,255,0.08)' }}>
                   <RefreshIcon />
                 </IconButton>
-                <Badge badgeContent={unreadCount} color="error" overlap="circular">
+                <Badge badgeContent={stats.unread} color="error" overlap="circular">
                   <Box sx={{ p: 1, borderRadius: '50%', backgroundColor: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
                     <NotificationsIcon color="primary" />
                   </Box>
@@ -1289,7 +673,7 @@ export default function Home() {
                         onChange={(e) => {
                           setFilterType(e.target.value);
                           setPage(1);
-                          clientLog('info', 'component', `Changed filter type to ${e.target.value}`);
+                          clientLog('info', 'component', `Changed filter type to ${e.target.value}`).catch(() => {});
                         }}
                         sx={{ minWidth: 140 }}
                       >
@@ -1306,7 +690,7 @@ export default function Home() {
                         onChange={(e) => {
                           setFilterRead(e.target.value);
                           setPage(1);
-                          clientLog('info', 'component', `Changed status filter to ${e.target.value}`);
+                          clientLog('info', 'component', `Changed status filter to ${e.target.value}`).catch(() => {});
                         }}
                         sx={{ minWidth: 140 }}
                       >
@@ -1386,7 +770,7 @@ export default function Home() {
                         page={page}
                         onChange={(_, value) => {
                           setPage(value);
-                          clientLog('info', 'component', `Navigated to page ${value}`);
+                          clientLog('info', 'component', `Navigated to page ${value}`).catch(() => {});
                         }}
                         color="primary"
                       />
@@ -1475,7 +859,7 @@ export default function Home() {
             value={mobileTab}
             onChange={(_, newValue) => {
               setMobileTab(newValue);
-              clientLog('info', 'component', `Switched mobile tab to ${newValue === 0 ? 'All' : 'Priority'}`);
+              clientLog('info', 'component', `Switched mobile tab to ${newValue === 0 ? 'All' : 'Priority'}`).catch(() => {});
             }}
             showLabels
             sx={{ backgroundColor: '#0f172a' }}
