@@ -385,4 +385,44 @@ WHERE n.type = 'Placement'
   AND sn.created_at >= NOW() - INTERVAL 7 DAY;
 ```
 
+---
+
+# Stage 4
+
+This section addresses the database load issues caused by fetching notifications on every page load and details performance optimization strategies and tradeoffs.
+
+---
+
+## 1. Mitigation Strategies
+
+To prevent the persistent database from getting overwhelmed by page-load traffic, we suggest three architectural improvements:
+
+### Strategy A: Caching Layer with Redis
+Introduce an in-memory cache (Redis) to store the active unread notification list and unread count for each student.
+* **Mechanism**:
+  * On API fetch, check Redis using key `student:student_id:notifications`. If present, return immediately.
+  * If a cache miss occurs, query the database, write the results to Redis with a TTL (Time-To-Live) of 1 hour, and return.
+  * **Cache Invalidation**: On dispatching a new notification or marking a notification as read, invalidate or update the specific Redis key.
+
+### Strategy B: Client-Side Local Storage & Conditional GET (ETags)
+Utilize HTTP caching headers (`ETag` or `Last-Modified`) to avoid transferring data over the network if nothing has changed.
+* **Mechanism**:
+  * The server returns an `ETag` (a hash of the student's notification states) in the response header.
+  * The client stores the data and, on subsequent page loads, sends the `If-None-Match: <ETag>` header.
+  * The server performs a cheap check (e.g., checking a fast Redis timestamp key). If unchanged, it returns `304 Not Modified` without querying the database or sending a JSON body.
+
+### Strategy C: Real-Time Stream (Push instead of Pull)
+Instead of polling the server on each page load, the frontend relies on the established **SSE stream** to update its local state. The initial load gets cached data, and all subsequent additions are pushed dynamically.
+
+---
+
+## 2. Tradeoff Analysis
+
+| Strategy | Advantages (Pros) | Disadvantages (Cons) / Tradeoffs |
+| :--- | :--- | :--- |
+| **Redis Caching** | * Drastically reduces DB reads (down to near-zero on cache hit).<br>* Sub-millisecond response latency. | * **Cache Invalidation Overhead**: Requires writing strict event triggers on updates. Failure to invalidate cache leads to stale read-status views.<br>* High memory consumption in Redis. |
+| **Conditional HTTP Caching (ETags)** | * Extremely low network bandwidth consumption.<br>* Follows standard HTTP/2 web specifications. | * Still requires a roundtrip request to the backend server to validate the ETag, meaning the backend server still receives the request (even if the DB query is saved). |
+| **SSE Push Architecture** | * Zero HTTP polling requests after connection initialization.<br>* Instant real-time user experience. | * **State Synchronization**: If a user logs in on a new tab, state must be loaded from cache. Managing open connections consumes server sockets and file descriptors. |
+
+
 
