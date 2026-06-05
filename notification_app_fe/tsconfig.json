@@ -19,8 +19,7 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"],
-      "logging-middleware": ["../logging_middleware/src/index.ts"]
+      "@/*": ["./src/*"]
     }
   },
   "include": [
