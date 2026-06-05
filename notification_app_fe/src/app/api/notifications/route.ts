@@ -1,23 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getNotifications } from '../../../lib/notificationStore';
+import axios from 'axios';
+
+const BACKEND_URL = 'http://localhost:3001/evaluation-service/notifications';
+const AUTH_TOKEN = 'Bearer student_token_23bq1a5469';
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const limit = parseInt(searchParams.get('limit') || '10', 10);
-  const page = parseInt(searchParams.get('page') || '1', 10);
-  const notification_type = (searchParams.get('notification_type') || 'all') as 'Placement' | 'Result' | 'Event' | 'all';
-  const is_read_raw = searchParams.get('is_read');
-  const is_read = is_read_raw === 'true' ? true : is_read_raw === 'false' ? false : 'all';
+  try {
+    const { searchParams } = new URL(request.url);
+    const limit = searchParams.get('limit') || '10';
+    const page = searchParams.get('page') || '1';
+    const notification_type = searchParams.get('notification_type');
+    const is_read = searchParams.get('is_read');
 
-  const data = getNotifications({
-    limit,
-    page,
-    notification_type,
-    is_read,
-  });
+    const params: Record<string, string> = { limit, page };
+    if (notification_type && notification_type !== 'all') {
+      params.notification_type = notification_type;
+    }
+    if (is_read && is_read !== 'all') {
+      params.is_read = is_read;
+    }
 
-  return NextResponse.json({
-    success: true,
-    data,
-  });
+    const response = await axios.get(BACKEND_URL, {
+      params,
+      headers: { Authorization: AUTH_TOKEN }
+    });
+
+    return NextResponse.json(response.data);
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
 }

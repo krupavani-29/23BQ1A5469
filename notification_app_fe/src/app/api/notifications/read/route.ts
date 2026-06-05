@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { markAsRead } from '../../../../lib/notificationStore';
+import axios from 'axios';
+
+const BACKEND_URL = 'http://localhost:3001/evaluation-service/notifications/read';
+const AUTH_TOKEN = 'Bearer student_token_23bq1a5469';
 
 export async function PATCH(request: NextRequest) {
-  const body = await request.json();
-  const { notificationIDs } = body;
-
-  if (!Array.isArray(notificationIDs)) {
-    return NextResponse.json({ success: false, error: 'notificationIDs must be an array' }, { status: 400 });
+  try {
+    const body = await request.json();
+    const response = await axios.patch(BACKEND_URL, body, {
+      headers: { Authorization: AUTH_TOKEN }
+    });
+    return NextResponse.json(response.data);
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
-
-  const updatedIDs = markAsRead(notificationIDs);
-  return NextResponse.json({
-    success: true,
-    message: `${updatedIDs.length} notification(s) marked as read`,
-    updatedIDs,
-  });
 }
