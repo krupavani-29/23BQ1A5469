@@ -294,3 +294,95 @@ VALUES
   (1043, 'd146095a-0d86-4a34-9e69-3900a14576bc');
 ```
 
+---
+
+# Stage 3
+
+This section analyzes the slow-running relational database query and presents optimized indexing strategies.
+
+---
+
+## 1. Query Analysis
+
+Target Query:
+```sql
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt ASC;
+```
+
+*(Note: Based on the DDL schema, we map `studentID` to `student_id`, `isRead` to `is_read`, and `createdAt` to `created_at` inside the `student_notifications` table.)*
+
+### Question A: Is this query accurate?
+**Yes**, the query is syntactically valid and accurately represents the logical filter of getting unread notifications for a single student. 
+
+**However**, from a production design perspective:
+* **Over-fetching (`SELECT *`)**: Using `*` fetches all columns, including potentially large fields (e.g., notification content/messages). This wastes network bandwidth and memory.
+* **Scope**: In our highly optimized schema, the filter columns (`student_id` and `is_read`) live in the mapping table (`student_notifications`), whereas the actual metadata lives in `notifications`. The query must join the tables to get the fields cleanly.
+
+---
+
+### Question B: Why is this query slow?
+1. **Full Table Scan**: Without an index, the query planner must read all 5,000,000 records of `student_notifications` sequentially from disk to check the filter condition.
+2. **Sort Overhead (FileSort)**: Sorting the matching records by `created_at ASC` requires the database to allocate memory (`work_mem` in PostgreSQL) or write temp files to disk if the matching dataset exceeds memory buffers.
+
+---
+
+### Question C: Proposed Indexing & Computation Cost
+
+We should add a **Composite (Multi-column) Index** targeting the exact query path:
+
+```sql
+CREATE INDEX idx_student_notifications_unread_created 
+ON student_notifications(student_id, is_read, created_at ASC);
+```
+
+#### Why this works:
+* **Equality First**: The index structure groups records by `student_id` first, and then by `is_read` inside that group. The query planner traverses the B-Tree in $O(\log N)$ time, instantly pointing to only the unread notifications for that student.
+* **Pre-sorted Index**: The final column in the composite index is `created_at ASC`. Because the B-Tree is pre-sorted, the database reads rows in the correct order directly from the index, eliminating the $O(M \log M)$ sorting phase.
+
+#### Computation and Storage Cost:
+* **Read Complexity**: Reduced from $O(N)$ sequential scan to $O(\log N)$ tree traversal. Query response time decreases from ~500ms+ to <1ms.
+* **Write Overhead**: Slightly increases write latency during inserts and updates on the `student_notifications` table ($O(\log N)$ overhead to update B-Tree index nodes).
+* **Storage**: Consumes additional disk space (~45-60MB for 5,000,000 entries), which is a negligible tradeoff for the performance boost.
+
+---
+
+## 2. Critique of Indexing Every Column
+
+> Advice: "Add indexes on every column to be safe."
+
+**This advice is highly ineffective and is a common database anti-pattern.**
+
+### Why:
+1. **Write Amplification**: Every insert, update, or delete must write to every single index. This severely degrades write throughput.
+2. **Index Space Bloat**: Indexes consume RAM. If the total size of all indexes exceeds the database server's cache (`shared_buffers`), the database must swap index blocks in and out of disk, causing a severe drop in performance.
+3. **Relational Limits**: Databases cannot merge multiple single-column indexes effectively for queries with multiple filter/sort columns. A single composite index is far more efficient than multiple independent single-column indexes.
+
+---
+
+## 3. Placement Query (Last 7 Days)
+
+Query to find all students who received a placement notification in the last 7 days:
+
+### PostgreSQL Version:
+```sql
+SELECT DISTINCT s.student_id, s.name, s.email
+FROM students s
+JOIN student_notifications sn ON s.student_id = sn.student_id
+JOIN notifications n ON sn.notification_id = n.notification_id
+WHERE n.type = 'Placement'
+  AND sn.created_at >= NOW() - INTERVAL '7 days';
+```
+
+### MySQL Version:
+```sql
+SELECT DISTINCT s.student_id, s.name, s.email
+FROM students s
+JOIN student_notifications sn ON s.student_id = sn.student_id
+JOIN notifications n ON sn.notification_id = n.notification_id
+WHERE n.type = 'Placement'
+  AND sn.created_at >= NOW() - INTERVAL 7 DAY;
+```
+
+
