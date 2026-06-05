@@ -622,3 +622,45 @@ The functional Priority Inbox CLI script (`priorityInbox.ts`) retrieves raw data
 
 =============================================================
 ```
+
+---
+
+# Stage 7
+
+This section details the frontend implementation of the Notification Center using Next.js/React and Material UI.
+
+---
+
+## 1. Application Design & Responsive Layouts
+
+The application is hosted locally on `http://localhost:3000` and features a responsive premium dark-mode interface:
+
+*   **Desktop Layout**: 
+    *   **AppBar Header**: Displays the anonymous student profile (Roll No: `23BQ1A5469`, GitHub: `krupavani-29`), an active refresh button, and a dynamic real-time badge count showing the number of unread notifications.
+    *   **Grid System**: A split-view page displaying the **Priority Inbox** (Top 10 notifications ranked by score) in a left panel, and the **All Inbox** (all notifications with interactive filters and pagination) in the main right panel.
+*   **Mobile Layout (<600px)**:
+    *   Folds into a single-column layout.
+    *   Features a persistent **Bottom Navigation Bar** that allows the user to switch seamlessly between the **All Inbox** view and the **Priority Inbox** view.
+*   **Aesthetics**: Uses premium deep dark colors (`#0b0f19` background, `#111827` paper panels) with neon/indigo borders (`#6366f1` transitions), icons corresponding to each notification type, and glowing status indicators for read vs unread states.
+
+---
+
+## 2. Dynamic Features & Simulated Stream
+
+*   **Real-time Push Simulation**: A **Simulate SSE** trigger generates randomized new notifications (e.g. Placement drives, Exam results, Tech symposium announcements) on the fly, immediately prepending them to the dashboard and recalculating priority scores and counts without page reload.
+*   **Interactive Modals**: Clicking on any notification card opens an elegant dialog showing full details and automatically marks the notification as read in local state.
+*   **Custom Filtering**:
+    *   Filter by notification category (`Placement`, `Result`, `Event`).
+    *   Filter by delivery status (`Read`, `Unread`, `All`).
+*   **Pagination**: Supports custom page sizes (`5`, `10`, or `25` per page) with Next/Prev navigation.
+
+---
+
+## 3. Observation & Logging Integration
+
+Every user action (navigation, filter changes, pagination, modal opens, simulator triggers) is tracked and logged through client-side and server-side logs via our `logging_middleware` package.
+
+*   Client components log interactions locally and submit them to a proxy endpoint (`/api/logs`).
+*   Server endpoints capture requests and proxy them securely to the remote logging API.
+*   Log messages adhere to the strict 48-character length constraint.
+

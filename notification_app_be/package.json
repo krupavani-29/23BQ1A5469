@@ -1,0 +1,13 @@
+{
+  "name": "notification-app-backend",
+  "version": "1.0.0",
+  "description": "Backend service for the Notification System",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "logging-middleware": "file:../logging_middleware"
+  }
+}
