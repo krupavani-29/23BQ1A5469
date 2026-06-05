@@ -532,6 +532,93 @@ function consume_send_delivery_job(sub_job):
         throw error
 ```
 
+---
 
+# Stage 6
 
+This section details the implementation of the Priority Inbox CLI client, the mathematical definition of the ranking algorithm, the architectural plan for heap-based scaling, and the CLI execution output.
 
+---
+
+## 1. Priority Score Ranking Algorithm
+
+To surface the most relevant notifications first, we use a hybrid ranking function that combines category urgency (weight) with temporal recency.
+
+### Weight Mapping:
+* **Placement** notifications (critical for careers): Weight = `3`
+* **Result** notifications (highly important updates): Weight = `2`
+* **Event** notifications (standard announcements): Weight = `1`
+* **Other / Default**: Weight = `0`
+
+### Mathematical Formulation:
+$$\text{Score} = (W_c \times 86400) + T_e$$
+
+Where:
+* $W_c$ is the Category Weight (Placement = 3, Result = 2, Event = 1).
+* $86400$ is the number of seconds in a single day. This constant multiplier ensures that a higher-priority category (e.g., Placement) will always rank above a lower-priority category (e.g., Result) unless the lower-priority notification is **at least 24 hours more recent**.
+* $T_e$ is the UNIX epoch timestamp of the notification (in seconds).
+
+---
+
+## 2. Heap-Based Scaling Strategy
+
+When scaling to retrieve the top $K$ ($K = 10$) notifications out of millions of items ($N \gg 10^7$):
+* **Naive Approach (Sorting)**: Loading all notifications into memory and sorting them takes $O(N \log N)$ time complexity and $O(N)$ memory. This causes out-of-memory crashes at scale.
+* **Optimized Approach (Min-Heap)**: We can use a **Min-Heap** data structure of fixed capacity $K$.
+  1. Iterate through the stream of notifications one-by-one.
+  2. Push each notification into the Min-Heap.
+  3. If the size of the heap exceeds $K$, pop the root (which holds the lowest score in the heap).
+  4. After scanning all items, the heap contains the top $K$ highest-priority items.
+  5. The time complexity is reduced to $O(N \log K)$ and auxiliary memory is reduced to a constant $O(K)$ space.
+
+---
+
+## 3. CLI Execution Output
+
+The functional Priority Inbox CLI script (`priorityInbox.ts`) retrieves raw data from the remote evaluation service, ranks each item, and displays the top 10 elements:
+
+```text
+================== PRIORITY INBOX (TOP 10) ==================
+
+[1] Score: 1780859416 | Type: Placement | Time: 2026-06-05 00:40:16
+    Msg: Alphabet Inc. Class A hiring
+    ID : 54af6c51-b5ae-410b-a9e2-479ae0cfeabf
+
+[2] Score: 1780855891 | Type: Placement | Time: 2026-06-04 23:41:31
+    Msg: Visa Inc. hiring
+    ID : 36c4fcea-aa3d-4ef5-a680-ab725c4afe5f
+
+[3] Score: 1780854166 | Type: Placement | Time: 2026-06-04 23:12:46
+    Msg: Apple Inc. hiring
+    ID : cd5b7f80-02e1-4ac3-b386-453dd4bbeda3
+
+[4] Score: 1780843336 | Type: Placement | Time: 2026-06-04 20:12:16
+    Msg: Alphabet Inc. Class C hiring
+    ID : e1784e49-bbf6-422b-88b0-5a31d96f4189
+
+[5] Score: 1780803556 | Type: Placement | Time: 2026-06-04 09:09:16
+    Msg: Meta Platforms Inc. hiring
+    ID : 34adc7ee-c107-4f62-ac50-775f85dceeae
+
+[6] Score: 1780794706 | Type: Placement | Time: 2026-06-04 06:41:46
+    Msg: Broadcom Inc. hiring
+    ID : 0f0f271f-71dd-40f7-b27b-29bb826033e1
+
+[7] Score: 1780773001 | Type: Result | Time: 2026-06-05 00:40:01
+    Msg: project-review
+    ID : 2bb134a9-90f8-4345-b3ce-6cd6dcd1d94e
+
+[8] Score: 1780771411 | Type: Result | Time: 2026-06-05 00:13:31
+    Msg: mid-sem
+    ID : 3b59bde4-19ca-41da-a7dd-3c2c28897967
+
+[9] Score: 1780769596 | Type: Result | Time: 2026-06-04 23:43:16
+    Msg: project-review
+    ID : 86b44415-5442-4b56-9cc9-30f8933e8afc
+
+[10] Score: 1780742551 | Type: Result | Time: 2026-06-04 16:12:31
+    Msg: mid-sem
+    ID : d6b13873-f98f-4038-a818-0c3fcfe7fe71
+
+=============================================================
+```

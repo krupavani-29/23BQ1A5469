@@ -1,0 +1,30 @@
+{
+  "name": "logging-middleware",
+  "version": "1.0.0",
+  "description": "Reusable logging middleware for system evaluation tracking",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "register": "ts-node register.ts",
+    "priority": "ts-node src/priorityInbox.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5"
+  },
+  "peerDependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.12.7",
+    "express": "^4.19.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
